@@ -1,0 +1,116 @@
+model PPercentTotalDemand
+  options noimplicit
+  uses "mmxprs"
+
+
+  declarations
+  ! Index set
+    Months: set of integer                          ! Index set for months
+    NMonths: integer                                ! Number of months
+
+  ! Decision variables
+    SolarUnits: mpvar                               ! Number of solar units per percentage of solar thermal energy
+    StorageUnits: mpvar                             ! Number of storage units per percentage of solar thermal energy
+    StorageCharge: array(Months) of mpvar           ! Monthly storage charge per percentage of solar thermal energy
+    StorageNetGain: array(Months) of mpvar          ! Monthly storage net gain per percentage of solar thermal energy
+    Waste: array(Months) of mpvar                   ! Monthly solar waste per percentage of solar thermal energy
+    Gas: array(Months) of mpvar                     ! Monthly gas required to make up the remaining heat demand not met by solar thermal energy
+
+  ! Parameters
+    Leakage: real                                   ! Efficency of the system
+    SolarCost: real                                 ! Cost of Solar
+    StorageCost: real                               ! Cost of Storage
+    GasCost: real                                   ! Cost of Gas
+    HeatDemand: array(Months) of real               ! Monthly heat demand
+    HeatSupply: array(Months) of real               ! Monthly heat supply
+    Buffer: real                                    ! Equals 0.1 to be multiplied by StorageUnits to get a 10% buffer.
+    p: real                                         ! Percentage of demand required to be satisfied by solar
+
+    ! Constraints
+    C1: array(Months) of linctr
+    C2: linctr
+    C3: linctr
+    C4: linctr
+
+    ! Costs
+    SetupCost: linctr                           ! Total set up cost to meet required demand
+    YearlyGasCost: linctr                       ! Yearly gas cost to meet required demand
+
+    TotalWaste: linctr                          ! Total waste produced while meeting the required demand
+  end-declarations
+
+  ! Initialise the required data for the problem (Real_Data_Evac.dat or Real_Data_Flat.dat)
+  initialisations from "Real_Data_Evac.dat"
+    Months NMonths SolarCost StorageCost GasCost HeatDemand HeatSupply Buffer Leakage p
+  end-initialisations
+
+  forall(t in Months) do ! Start a loop for all constraints which are dependant on the month
+
+    ! Let the net gain of the storage be either negative or positive
+    StorageNetGain(t) is_free
+
+    ! Set storage charge for the end of month t, where month t = 1 uses the storage charge of month 12 and thereafter month t uses the storage charge from month t-1
+    C1(t) := StorageCharge(t) = Leakage*(if(t>1, StorageCharge(t-1), StorageCharge(NMonths))) + StorageNetGain(t)
+
+    ! Satisfy 100% monthly demand from both sources; solar and gas, while considering waste
+    HeatSupply(t)*SolarUnits - StorageNetGain(t) - Waste(t) + Gas(t) = HeatDemand(t)
+
+    ! Ensures that gas must be at least 0
+    Gas(t) >=0
+
+    ! Ensures that waste must be at least 0
+    Waste(t) >= 0
+
+    ! Charge and storage contstraint
+    StorageCharge(t) >= Buffer * StorageUnits ! Ensures charge cannot be less than the 10% buffer
+    StorageCharge(t) <= StorageUnits          ! Ensures charge cannot be more than the total storage capactiy
+  end-do
+
+  ! Ensures solar units must be at least 0
+  C2 := SolarUnits >= 0
+
+  ! Ensures storage units must be at least 0
+  C3 := StorageUnits >= 0
+
+  ! Allows for the assumption that the initial storage charge for the next year is equal to the storage charge at t = 12 of the previous year.
+  C3 := StorageCharge(NMonths) >= Buffer * StorageUnits
+
+  ! Satisfy p percent of solar by multiplying the desired percent by the heat demand
+  C4 := sum(t in Months) (SolarUnits*HeatSupply(t) - StorageNetGain(t) - Waste(t)) >= p/100 * sum(t in Months) HeatDemand(t)
+
+  ! Calculates total set up cost and yearly gas cost
+  SetupCost := SolarUnits*SolarCost + StorageUnits*StorageCost ! The total cost for the solar thermal system
+  YearlyGasCost := sum(t in Months) Gas(t)*GasCost  ! The total cost of gas
+
+  ! Calculates total waste
+  TotalWaste := sum(t in Months) Waste(t)
+
+  ! Minimises the STDH network set-up cost
+  minimise(SetupCost)
+
+fopen("model2_ppercent.csv", F_OUTPUT)
+
+  writeln(p,"%")
+  writeln("Total Solar Cost,", getsol(SetupCost))
+  writeln("Total Gas Cost,", getsol(YearlyGasCost))
+  writeln("Solar Units,", getsol(SolarUnits))
+  writeln("Storage Units,",getsol(StorageUnits))
+  writeln("Total Waste for,",getsol(TotalWaste))
+  writeln("Yearly Gas Cost,", getsol(YearlyGasCost))
+
+  write("Months")
+  forall(t in Months) write(",",t)
+  writeln
+  write("Solar thermal output")
+  forall(t in Months) write(",", getsol(HeatSupply(t)*SolarUnits))
+  writeln
+  write("Storage Net Gain")
+  forall(t in Months) write(",", getsol(StorageNetGain(t)))
+  writeln
+  write("Monthly waste for")
+  forall(t in Months) write(",", getsol(Waste(t)))
+  writeln
+
+fclose(F_OUTPUT)
+
+end-model

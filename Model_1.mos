@@ -1,0 +1,100 @@
+model ModelName
+  options noimplicit
+  uses "mmxprs"
+
+  declarations
+  ! Index set
+    Months: set of integer                          ! Index set for months
+    NMonths: integer                                ! Number of months
+    
+  ! Decision variables
+    SolarUnits: mpvar                               ! Number of solar units per percentage of solar thermal energy
+    StorageUnits: mpvar                             ! Number of storage units per percentage of solar thermal energy
+    StorageCharge: array(Months) of mpvar           ! Monthly storage charge per percentage of solar thermal energy
+    StorageNetGain: array(Months) of mpvar          ! Monthly storage net gain per percentage of solar thermal energy
+
+  ! Parameters
+    Leakage: real                                   ! Efficency of the system
+    SolarCost: real                                 ! Cost of Solar
+    StorageCost: real                               ! Cost of Storage
+    HeatDemand: array(Months) of real               ! Monthly heat demand
+    HeatSupply: array(Months) of real               ! Monthly heat supply
+    Buffer: real                                    ! Equals 0.1 to be multiplied by StorageUnits to get a 10% buffer.
+
+  ! Constraints
+    C1: array(Months) of linctr
+    C2: array(Months) of linctr
+    C4: linctr
+    C3: linctr
+    C5: linctr
+    C6: linctr
+
+    SetupCost: linctr     ! Total set up cost to meet demand
+
+  end-declarations
+
+  ! Initialise the required data for the problem (Real_Data_Evac.dat or Real_Data_Flat.dat)
+  initialisations from "Real_Data_Evac.dat"
+    Months NMonths SolarCost StorageCost HeatDemand HeatSupply Buffer Leakage
+  end-initialisations
+
+  ! Let the net gain of the storage be either negative or positive
+  forall(t in Months) do
+    StorageNetGain(t) is_free
+  end-do
+
+  ! Set storage charge for the end of month t, where month t = 1 uses the storage charge of month 12 and thereafter month t uses the storage charge from month t-1
+  forall(t in Months) do
+    C1(t) := StorageCharge(t) = Leakage*(if(t>1, StorageCharge(t-1), StorageCharge(NMonths))) + StorageNetGain(t)
+  end-do
+
+  !Satisfy monthly demand
+  forall(t in Months) do
+    C2(t) := HeatDemand(t) <= SolarUnits*HeatSupply(t) - StorageNetGain(t)
+  end-do
+
+  ! Satisfy total demand
+  C3 := sum(t in Months) (SolarUnits*HeatSupply(t) - StorageNetGain(t)) >= sum(t in Months) HeatDemand(t)
+
+  ! Charge and storage contstraint
+  forall(t in Months) do
+    StorageCharge(t) >= Buffer * StorageUnits     ! Ensures charge cannot be less than the 10% buffer
+    StorageCharge(t) <= StorageUnits              ! Ensures charge cannot be more than the total storage capacity
+  end-do
+
+  ! Ensures solar units must be at least 0
+  C4 := SolarUnits >= 0
+
+  ! Ensures storage units must be at least 0
+  C5 := StorageUnits >= 0
+
+  ! Allows for the assumption that the initial storage charge for the next year is equal to the storage charge at t = 12 of the previous year.
+  C6 := StorageCharge(NMonths) >= Buffer * StorageUnits
+
+  ! Calculating total set up cost
+  SetupCost := SolarUnits*SolarCost + StorageUnits*StorageCost
+
+  ! Minimise the total set-up cost
+  minimise(SetupCost)
+
+fopen("model1.csv", F_OUTPUT)
+
+  writeln("Total Solar Cost,", getsol(SetupCost))
+  writeln("Solar Units,", getsol(SolarUnits))
+  writeln("Storage Units,",getsol(StorageUnits))
+
+  write("Months")
+  forall(t in Months) write(",",t)
+  writeln
+  write("Solar thermal output")
+  forall(t in Months) write(",", getsol(HeatSupply(t)*SolarUnits))
+  writeln
+  write("Storage Net Gain")
+  forall(t in Months) write(",", getsol(StorageNetGain(t)))
+  writeln
+
+fclose(F_OUTPUT)
+
+  ! writeln(getparam("XPRS_lpstatus"))
+
+end-model
